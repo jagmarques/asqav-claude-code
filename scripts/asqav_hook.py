@@ -25,6 +25,11 @@ lines, or command output, so secrets in either never leave the machine.
 FAIL OPEN: this hook is evidence, not a gate. Any failure (no API key, API
 down, malformed input) prints a one-line warning and exits 0 so the Claude
 Code session is never blocked. Exit code 2 (the blocking code) is never used.
+
+User-facing output uses the documented hook JSON ``systemMessage`` field:
+plain stdout from a Stop hook on exit 0 goes to Claude and the debug log,
+never to the user, so the receipt line and Stop-time warnings are emitted
+as ``{"systemMessage": ...}`` on stdout.
 """
 
 from __future__ import annotations
@@ -61,12 +66,32 @@ _SESSION_ID_SAFE = re.compile(r"[^A-Za-z0-9_-]")
 
 
 def buffer_dir() -> str:
-    """Session buffers live OUTSIDE the project tree (never committed)."""
+    """Session buffers live OUTSIDE the project tree (never committed).
+
+    The directory is owner-only (0700): on Linux the system temp dir is
+    shared, so a 0755 directory would expose file paths and program names
+    to every local user. The chmod also reclaims a directory left behind
+    by an earlier version with looser permissions.
+    """
     base = os.environ.get("ASQAV_BUFFER_DIR") or os.path.join(
         tempfile.gettempdir(), "asqav-claude-code"
     )
-    os.makedirs(base, exist_ok=True)
+    os.makedirs(base, mode=0o700, exist_ok=True)
+    if os.name == "posix":
+        os.chmod(base, 0o700)
     return base
+
+
+def open_private(path: str, *, append: bool = False):
+    """Open ``path`` for writing with owner-only permissions (0600).
+
+    ``os.open`` applies the mode at creation, before any bytes land, so the
+    file is never observable with broader permissions. The mode argument is
+    a no-op on Windows, which has no POSIX permission bits.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else os.O_TRUNC)
+    fd = os.open(path, flags, 0o600)
+    return os.fdopen(fd, "a" if append else "w", encoding="utf-8")
 
 
 def buffer_path(session_id: str) -> str:
@@ -75,7 +100,7 @@ def buffer_path(session_id: str) -> str:
 
 
 def append_record(session_id: str, record: dict[str, Any]) -> None:
-    with open(buffer_path(session_id), "a", encoding="utf-8") as fh:
+    with open_private(buffer_path(session_id), append=True) as fh:
         fh.write(json.dumps(record, sort_keys=True) + "\n")
 
 
@@ -153,6 +178,29 @@ def file_path_from_input(tool_name: str, tool_input: dict[str, Any]) -> str | No
     if tool_name == "NotebookEdit":
         return tool_input.get("notebook_path") or tool_input.get("file_path")
     return tool_input.get("file_path")
+
+
+# ---------------------------------------------------------------------------
+# User-visible output
+# ---------------------------------------------------------------------------
+
+
+def emit_system_message(message: str) -> None:
+    """Show ``message`` to the user via the documented hook JSON output.
+
+    Plain stdout from a Stop hook on exit 0 is shown to Claude and written
+    to the debug log, never to the user. The ``systemMessage`` field of the
+    hook JSON output is the documented way to put a line in front of the
+    user, so anything they must see goes through here.
+    """
+    print(json.dumps({"systemMessage": message}))
+
+
+def warn_user(message: str) -> None:
+    """Warn on stderr (debug log) and as a user-visible system message."""
+    line = f"asqav: warning: {message}"
+    print(line, file=sys.stderr)
+    emit_system_message(line)
 
 
 # ---------------------------------------------------------------------------
@@ -378,18 +426,14 @@ def handle_stop(event: dict[str, Any]) -> None:
         return  # nothing buffered, nothing to sign
     api_key = os.environ.get("ASQAV_API_KEY")
     if not api_key:
-        print(
-            "asqav: warning: ASQAV_API_KEY not set; session activity buffered, no receipt signed.",
-            file=sys.stderr,
-        )
+        warn_user("ASQAV_API_KEY not set; session activity buffered, no receipt signed.")
         return
     agent_id = os.environ.get("ASQAV_AGENT_ID")
     if not agent_id:
-        print(
-            "asqav: warning: ASQAV_AGENT_ID not set; create an agent at "
+        warn_user(
+            "ASQAV_AGENT_ID not set; create an agent at "
             "https://www.asqav.com/dashboard (or POST /api/v1/agents/create) "
-            "and export it.",
-            file=sys.stderr,
+            "and export it."
         )
         return
     cwd = event.get("cwd") or os.getcwd()
@@ -398,10 +442,9 @@ def handle_stop(event: dict[str, Any]) -> None:
         summary=summary, agent_id=agent_id, cwd=cwd, session_id=session_id
     )
     if body is None:
-        print(
-            "asqav: warning: not inside a git repository (repo_ref/commit_sha "
-            "unavailable); no code_authorship receipt signed.",
-            file=sys.stderr,
+        warn_user(
+            "not inside a git repository (repo_ref/commit_sha "
+            "unavailable); no code_authorship receipt signed."
         )
         return
     base = _base_sha_from_records(records)
@@ -411,7 +454,7 @@ def handle_stop(event: dict[str, Any]) -> None:
     # Persist the canonical summary next to the buffer so the change_digest
     # stays re-derivable after signing.
     summary_path = buffer_path(session_id).replace(".jsonl", ".summary.json")
-    with open(summary_path, "w", encoding="utf-8") as fh:
+    with open_private(summary_path) as fh:
         json.dump(summary, fh, indent=2, sort_keys=True)
 
     try:
@@ -430,22 +473,21 @@ def handle_stop(event: dict[str, Any]) -> None:
                 detail = f" {exc.read().decode('utf-8', errors='replace')[:200]}"
             except Exception:  # noqa: BLE001
                 detail = ""
-        print(
-            f"asqav: warning: receipt signing failed ({exc}{detail}); "
-            "your session is unaffected.",
-            file=sys.stderr,
+        warn_user(
+            f"receipt signing failed ({exc}{detail}); your session is unaffected."
         )
         return
 
     rotate_buffer(session_id)
     receipt_path = buffer_path(session_id).replace(".jsonl", ".receipt.json")
-    with open(receipt_path, "w", encoding="utf-8") as fh:
+    with open_private(receipt_path) as fh:
         json.dump(result, fh, indent=2, sort_keys=True, default=str)
     sig_id = result.get("signature_id", "")
     verify_url = result.get("verification_url", "")
-    print(f"asqav: signed code_authorship receipt {sig_id}")
+    message = f"asqav: signed code_authorship receipt {sig_id}"
     if verify_url:
-        print(f"asqav: verify at {verify_url}")
+        message += f" verify at {verify_url}"
+    emit_system_message(message)
 
 
 # ---------------------------------------------------------------------------
