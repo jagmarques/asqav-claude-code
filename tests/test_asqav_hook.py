@@ -306,3 +306,39 @@ def test_buffer_dir_reclaims_loose_permissions(tmp_path, monkeypatch):
     monkeypatch.setenv("ASQAV_BUFFER_DIR", str(loose))
     asqav_hook.buffer_dir()
     assert stat.S_IMODE(os.stat(loose).st_mode) == 0o700
+
+
+def test_broken_sdk_falls_back_to_https(monkeypatch, capsys):
+    """A broken asqav module (AttributeError) must still sign via HTTPS."""
+    import json as _json
+
+    import scripts.asqav_hook as h
+
+    def boom(*a, **k):
+        raise AttributeError("module 'asqav' has no attribute 'init'")
+
+    captured = {}
+
+    def fake_https(body, *, api_key, agent_id):
+        captured["used"] = True
+        return {"signature_id": "sig_test", "verify_url": "https://asqav.com/verify/sig_test"}
+
+    monkeypatch.setattr(h, "sign_via_sdk", boom)
+    monkeypatch.setattr(h, "sign_via_https", fake_https)
+    monkeypatch.setenv("ASQAV_API_KEY", "sk_test_x")
+    monkeypatch.setenv("ASQAV_AGENT_ID", "agt_x")
+    h.rotate_buffer("t-fallback")
+    h.handle_post_tool_use(
+        {
+            "session_id": "t-fallback",
+            "tool_name": "Edit",
+            "tool_input": {"file_path": "scripts/asqav_hook.py"},
+            "tool_response": {},
+        }
+    )
+    capsys.readouterr()
+    h.handle_stop({"session_id": "t-fallback", "cwd": "."})
+    out = capsys.readouterr().out
+    assert captured.get("used") is True, "HTTPS fallback was not used"
+    msg = _json.loads(out)
+    assert "sig_test" in msg.get("systemMessage", "")
