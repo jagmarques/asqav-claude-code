@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import sys
 
@@ -230,3 +231,78 @@ def test_buffer_rotation_prevents_double_sign(tmp_path, monkeypatch):
     assert asqav_hook.load_records(sid)
     asqav_hook.rotate_buffer(sid)
     assert asqav_hook.load_records(sid) == []
+
+
+# ---------------------------------------------------------------------------
+# User-visible output (hook JSON systemMessage)
+# ---------------------------------------------------------------------------
+
+
+def test_stop_success_emits_system_message_json(tmp_path, monkeypatch, capsys):
+    """The receipt line reaches the user via the documented systemMessage field.
+
+    Plain stdout from a Stop hook never reaches the user, so the success
+    path must print exactly one JSON object with systemMessage.
+    """
+    repo = git_repo(tmp_path)
+    sid = "sess-sysmsg-1"
+    asqav_hook.append_record(sid, {"event": "post", "command_sha256": "a" * 64, "program": "ls"})
+    monkeypatch.setenv("ASQAV_API_KEY", "sk_test_fake")
+    monkeypatch.setenv("ASQAV_AGENT_ID", "agt_fake")
+    fake = {
+        "signature_id": "sig_TESTONLY",
+        "verification_url": "https://asqav.com/verify/sig_TESTONLY",
+    }
+    monkeypatch.setattr(asqav_hook, "sign_via_sdk", lambda *a, **k: fake)
+    monkeypatch.setattr(asqav_hook, "sign_via_https", lambda *a, **k: fake)
+    asqav_hook.handle_stop({"session_id": sid, "hook_event_name": "Stop", "cwd": str(repo)})
+    out = capsys.readouterr().out.strip()
+    payload = json.loads(out)  # entire stdout is one parseable JSON object
+    assert "sig_TESTONLY" in payload["systemMessage"]
+    assert "https://asqav.com/verify/sig_TESTONLY" in payload["systemMessage"]
+
+
+def test_stop_without_api_key_emits_system_message(tmp_path):
+    """The missing-key warning is user-visible, not only a stderr line."""
+    repo = git_repo(tmp_path)
+    sid = "sess-nokey-2"
+    event = {
+        "session_id": sid,
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "cwd": str(repo),
+        "tool_input": {"command": "echo hi"},
+        "tool_response": {"stdout": "hi", "stderr": "", "exit_code": 0},
+    }
+    assert run_hook(event).returncode == 0
+    env = {k: "" for k in ("ASQAV_API_KEY", "ASQAV_AGENT_ID")}
+    result = run_hook({"session_id": sid, "hook_event_name": "Stop", "cwd": str(repo)}, env)
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert "ASQAV_API_KEY" in payload["systemMessage"]
+
+
+# ---------------------------------------------------------------------------
+# Buffer permissions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_buffer_dir_and_files_are_private(tmp_path):
+    """Fresh buffer dir is 0700 and buffer files are 0600 (temp dir is shared on Linux)."""
+    sid = "sess-perms-1"
+    asqav_hook.append_record(sid, {"event": "post", "command_sha256": "a" * 64, "program": "ls"})
+    dir_mode = stat.S_IMODE(os.stat(asqav_hook.buffer_dir()).st_mode)
+    file_mode = stat.S_IMODE(os.stat(asqav_hook.buffer_path(sid)).st_mode)
+    assert dir_mode == 0o700
+    assert file_mode == 0o600
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_buffer_dir_reclaims_loose_permissions(tmp_path, monkeypatch):
+    """A pre-existing world-readable buffer dir is tightened to 0700."""
+    loose = tmp_path / "loose-buffers"
+    loose.mkdir(mode=0o755)
+    monkeypatch.setenv("ASQAV_BUFFER_DIR", str(loose))
+    asqav_hook.buffer_dir()
+    assert stat.S_IMODE(os.stat(loose).st_mode) == 0o700

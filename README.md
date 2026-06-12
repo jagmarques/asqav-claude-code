@@ -20,17 +20,16 @@ export ASQAV_AGENT_ID=agt_...
 3. Install the plugin. Either load it directly:
 
 ```bash
-git clone https://github.com/asqav/asqav-claude-code.git
+git clone https://github.com/jagmarques/asqav-claude-code.git
 claude --plugin-dir ./asqav-claude-code
 ```
 
 or paste the hooks block from [`examples/settings-snippet.json`](examples/settings-snippet.json) into your `.claude/settings.json` (fix the script path first).
 
-4. Run a Claude Code session inside a git repository. Edit a file, run a command, then stop the session. The Stop hook prints:
+4. Run a Claude Code session inside a git repository. Edit a file, run a command, then stop the session. Claude Code shows the receipt as a system message:
 
 ```
-asqav: signed code_authorship receipt sig_...
-asqav: verify at https://asqav.com/verify/sig_...
+asqav: signed code_authorship receipt sig_... verify at https://asqav.com/verify/sig_...
 ```
 
 5. Open the verify URL. That page is public, so you can hand it to a reviewer or an auditor as is.
@@ -57,7 +56,7 @@ The receipt records what the hooks observed, asserted by you as the producer and
 
 ## Fail open, always
 
-This hook is evidence, not a gate. Missing API key, network down, malformed input, not in a git repo: every failure path prints a one-line warning to stderr and exits 0. Your Claude Code session is never blocked because signing failed. The only network call happens once, at session stop.
+This hook is evidence, not a gate. Missing API key, network down, malformed input, not in a git repo: every failure path warns and exits 0. Failures at session stop (missing credentials, signing errors) also surface as a system message so you see why no receipt was signed. Your Claude Code session is never blocked because signing failed. The only network call happens once, at session stop.
 
 ## Configuration
 
