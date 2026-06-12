@@ -462,9 +462,8 @@ def handle_stop(event: dict[str, Any]) -> None:
             import asqav  # noqa: F401
 
             result = sign_via_sdk(body, api_key=api_key, agent_id=agent_id)
-        except (ImportError, TypeError):
-            # No SDK, or an older asqav release without the code_authorship
-            # keyword arguments: the stdlib HTTPS path covers both.
+        except Exception:  # noqa: BLE001 - any broken or partial SDK install
+            # The stdlib HTTPS path covers a missing, old, or broken asqav module.
             result = sign_via_https(body, api_key=api_key, agent_id=agent_id)
     except Exception as exc:  # noqa: BLE001 - fail open, never block the session
         detail = ""
