@@ -1,0 +1,12 @@
+# Session buffers are written to the system temp dir by default, but never
+# commit one if a custom ASQAV_BUFFER_DIR points inside the repo.
+session_*.jsonl
+session_*.jsonl.signed-*
+session_*.summary.json
+session_*.receipt.json
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
