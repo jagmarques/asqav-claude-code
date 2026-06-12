@@ -1,0 +1,11 @@
+{
+  "name": "asqav",
+  "description": "Signed code_authorship receipts for Claude Code sessions: tamper-evident evidence of what your coding agent changed, for EU AI Act and SOC 2 audits.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Asqav",
+    "email": "info@asqav.com"
+  },
+  "homepage": "https://asqav.com",
+  "license": "MIT"
+}
