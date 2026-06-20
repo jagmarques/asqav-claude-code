@@ -44,7 +44,7 @@ Per tool call, buffered to a local JSONL file outside your repo:
 - Bash commands: the SHA-256 of the command line and the program name (the first token, like `pytest` or `git`). Output is recorded as a hash too.
 - Session context: timestamps, working directory, git HEAD at the start of the session.
 
-At Stop, the buffer is aggregated into one canonical summary. Its SHA-256 becomes the receipt's `change_digest`, and the summary file stays on your machine so the digest can be re-derived later. After a successful sign, the buffer rotates so the same activity is never signed twice.
+At session stop, the buffered events are aggregated and signed into one receipt. After a successful sign, the buffer rotates so the same activity is never signed twice.
 
 ## What never leaves the machine
 
