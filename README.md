@@ -4,7 +4,7 @@ Signed evidence of what your coding agent did.
 
 This plugin watches a Claude Code session through hooks and, when the session stops, signs one Asqav `code_authorship` receipt summarizing it: which files changed (content hashes before and after), which commands ran (hashed), and the git context. The receipt is cryptographically signed, timestamped, and verifiable by anyone with the link.
 
-Teams adopting Claude Code are being asked for an audit trail of AI-generated code. The EU AI Act's record-keeping obligations start applying to many providers on 2 August 2026, and SOC 2 auditors already ask how production code gets written. A log file you can edit is weak evidence. A signed receipt is not.
+Teams adopting Claude Code are being asked for an audit trail of AI-generated code. The EU AI Act's record-keeping obligations for high-risk systems apply from 2 December 2027, and from 2 August 2028 for those classified under Annex I, after Regulation (EU) 2026/1744 replaced the applicability dates in Article 113; SOC 2 auditors already ask how production code gets written today. A log file you can edit is weak evidence. A signed receipt is not.
 
 ## Quickstart (about 5 minutes)
 
