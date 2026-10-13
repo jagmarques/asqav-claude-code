@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /absolute/path/to/asqav-claude-code/scripts/asqav_hook.py",
+            "command": "python3 \"/absolute/path/to/asqav-claude-code/scripts/asqav_hook.py\"",
             "timeout": 15
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /absolute/path/to/asqav-claude-code/scripts/asqav_hook.py",
+            "command": "python3 \"/absolute/path/to/asqav-claude-code/scripts/asqav_hook.py\"",
             "timeout": 15
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /absolute/path/to/asqav-claude-code/scripts/asqav_hook.py",
+            "command": "python3 \"/absolute/path/to/asqav-claude-code/scripts/asqav_hook.py\"",
             "timeout": 60
           }
         ]
@@ -40,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /absolute/path/to/asqav-claude-code/scripts/asqav_hook.py",
+            "command": "python3 \"/absolute/path/to/asqav-claude-code/scripts/asqav_hook.py\"",
             "timeout": 60
           }
         ]
