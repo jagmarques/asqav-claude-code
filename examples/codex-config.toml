@@ -1,0 +1,25 @@
+# Asqav receipts for OpenAI Codex: paste into ~/.codex/config.toml (or a
+# trusted <repo>/.codex/config.toml) and set the absolute script path.
+
+[[hooks.PreToolUse]]
+matcher = "^(apply_patch|Edit|Write)$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 'python3 "/absolute/path/to/asqav-claude-code/scripts/asqav_hook.py" --harness codex'
+timeout = 15
+
+[[hooks.PostToolUse]]
+matcher = "^(apply_patch|Edit|Write|Bash)$"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = 'python3 "/absolute/path/to/asqav-claude-code/scripts/asqav_hook.py" --harness codex'
+timeout = 15
+
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = 'python3 "/absolute/path/to/asqav-claude-code/scripts/asqav_hook.py" --harness codex'
+timeout = 60

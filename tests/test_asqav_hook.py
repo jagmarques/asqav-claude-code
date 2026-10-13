@@ -342,3 +342,93 @@ def test_broken_sdk_falls_back_to_https(monkeypatch, capsys):
     assert captured.get("used") is True, "HTTPS fallback was not used"
     msg = _json.loads(out)
     assert "sig_test" in msg.get("systemMessage", "")
+
+
+# ---------------------------------------------------------------------------
+# OpenAI Codex: same hook protocol, apply_patch edits, argv shell commands
+# ---------------------------------------------------------------------------
+
+CODEX = ["--harness", "codex"]
+
+
+def run_codex_hook(event: dict) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, SCRIPT, *CODEX],
+        input=json.dumps(event).encode("utf-8"),
+        capture_output=True,
+        env=os.environ.copy(),
+        timeout=60,
+    )
+
+
+def test_codex_apply_patch_hashes_every_touched_file(tmp_path):
+    repo = git_repo(tmp_path)
+    sid = "codex-patch-1"
+    patch = (
+        "*** Begin Patch\n"
+        "*** Update File: a.txt\n@@\n-hello\n+bye\n"
+        "*** Add File: b.txt\n+new\n"
+        "*** End Patch\n"
+    )
+    pre = {
+        "session_id": sid,
+        "hook_event_name": "PreToolUse",
+        "tool_name": "apply_patch",
+        "turn_id": "t1",
+        "cwd": str(repo),
+        "tool_input": {"command": patch},
+    }
+    assert run_codex_hook(pre).returncode == 0
+    (repo / "a.txt").write_text("bye\n")
+    (repo / "b.txt").write_text("new\n")
+    assert run_codex_hook(dict(pre, hook_event_name="PostToolUse", tool_response="ok")).returncode == 0
+
+    summary = asqav_hook.build_session_summary(sid, asqav_hook.load_records(sid))
+    files = {os.path.basename(p): v for p, v in summary["files"].items()}
+    assert files["a.txt"]["pre_sha256"] == hashlib.sha256(b"hello\n").hexdigest()
+    assert files["a.txt"]["post_sha256"] == hashlib.sha256(b"bye\n").hexdigest()
+    assert files["b.txt"]["pre_sha256"] is None
+    assert files["b.txt"]["post_sha256"] == hashlib.sha256(b"new\n").hexdigest()
+
+
+def test_codex_patch_under_edit_alias_still_parsed(tmp_path):
+    paths = asqav_hook.file_paths_from_input(
+        "Edit", {"command": "*** Begin Patch\n*** Delete File: old.py\n*** End Patch\n"}, "/r"
+    )
+    assert paths == ["/r/old.py"]
+
+
+def test_codex_shell_argv_is_hashed_never_stored(tmp_path):
+    sid = "codex-shell-1"
+    event = {
+        "session_id": sid,
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "cwd": str(tmp_path),
+        "tool_input": {"command": ["bash", "-lc", "curl -H 'token: s3cret' x"]},
+        "tool_response": "done",
+    }
+    assert run_codex_hook(event).returncode == 0
+    raw = open(asqav_hook.buffer_path(sid), encoding="utf-8").read()
+    assert "s3cret" not in raw
+    record = asqav_hook.load_records(sid)[0]
+    assert record["program"] == "bash"
+    assert record["command_sha256"] == asqav_hook.sha256_text("bash -lc curl -H 'token: s3cret' x")
+
+
+def test_codex_receipt_names_codex_as_the_producer(tmp_path, monkeypatch):
+    repo = git_repo(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["asqav_hook.py", *CODEX])
+    summary = asqav_hook.build_session_summary("codex-wire", [{"event": "post", "file_path": "a.txt", "post_sha256": "y" * 64}])
+    body = asqav_hook.build_sign_request(summary=summary, agent_id="agt_test", cwd=str(repo), session_id="codex-wire")
+    assert body["authored_by"]["tool"] == "codex"
+    assert body["authored_by"]["attestation_source"] == "codex-hooks"
+    assert body["change_ref"] == "codex:session:codex-wire"
+
+
+def test_harness_env_selects_codex(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["asqav_hook.py"])
+    monkeypatch.setenv("ASQAV_HARNESS", "codex")
+    assert asqav_hook.harness()["tool"] == "codex"
+    monkeypatch.delenv("ASQAV_HARNESS")
+    assert asqav_hook.harness()["tool"] == "claude-code"

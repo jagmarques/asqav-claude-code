@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Asqav receipts for Claude Code.
+"""Asqav receipts for Claude Code and OpenAI Codex.
 
-One script handles every hook event. Claude Code pipes the hook event JSON
-on stdin; the script dispatches on ``hook_event_name``:
+One script handles every hook event for both harnesses, which share the hook
+protocol. The harness pipes the hook event JSON on stdin; the script
+dispatches on ``hook_event_name``. Pass ``--harness codex`` (or set
+``ASQAV_HARNESS=codex``) when Codex runs it; Claude Code is the default.
 
-- ``PreToolUse`` (Edit/Write/NotebookEdit): hash the file's pre-state.
-- ``PostToolUse`` (Edit/Write/NotebookEdit/Bash): hash the file's post-state,
-  or the Bash command and its response.
+- ``PreToolUse`` (Edit/Write/NotebookEdit, Codex ``apply_patch``): hash each
+  touched file's pre-state.
+- ``PostToolUse`` (the same tools plus shell): hash each touched file's
+  post-state, or the shell command and its response.
 - ``Stop`` / ``SessionEnd``: aggregate the buffered tool activity and sign one
   Asqav ``protectmcp:lifecycle:code_authorship`` receipt for it, then rotate
   the buffer so nothing is ever signed twice.
@@ -46,17 +49,26 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 RECEIPT_TYPE = "protectmcp:lifecycle:code_authorship"
 ACTION_TYPE = "code:authorship"
-ATTESTATION_SOURCE = "claude-code-hooks"
+# Per harness: the tool name recorded in authored_by, and the attestation source
+# that marks model attribution as producer-asserted, never Asqav-verified.
+HARNESSES = {
+    "claude-code": {"tool": "claude-code", "attestation_source": "claude-code-hooks"},
+    "codex": {"tool": "codex", "attestation_source": "codex-hooks"},
+}
 # The api.asqav.com edge rejects bare Python-urllib UAs (Cloudflare error
 # 1010), so identify with a real product token like the asqav SDK does.
 USER_AGENT = f"asqav-claude-code/{__version__} (+https://www.asqav.com)"
 DEFAULT_API_URL = "https://api.asqav.com"
 
 FILE_TOOLS = {"Edit", "MultiEdit", "Write", "NotebookEdit"}
+# Codex edits files through apply_patch and runs commands through its shell tools
+PATCH_TOOLS = {"apply_patch"}
+SHELL_TOOLS = {"Bash", "shell", "exec_command", "local_shell"}
+_PATCH_PATH = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+?)\s*$|^\*\*\* Move to: (.+?)\s*$", re.M)
 _SESSION_ID_SAFE = re.compile(r"[^A-Za-z0-9_-]")
 
 
@@ -174,10 +186,46 @@ def repo_ref(cwd: str) -> str | None:
     return ref[:256] if ref else None
 
 
-def file_path_from_input(tool_name: str, tool_input: dict[str, Any]) -> str | None:
+def harness() -> dict[str, str]:
+    """The harness running the hook: ``--harness`` argument, then ASQAV_HARNESS."""
+    name = os.environ.get("ASQAV_HARNESS") or "claude-code"
+    if "--harness" in sys.argv[1:-1]:
+        name = sys.argv[sys.argv.index("--harness") + 1]
+    return HARNESSES.get(name, HARNESSES["claude-code"])
+
+
+def command_text(tool_input: dict[str, Any]) -> str:
+    """The shell or patch text; Codex may pass the command as an argv list."""
+    command = tool_input.get("command") or tool_input.get("cmd") or ""
+    if isinstance(command, list):
+        return " ".join(str(part) for part in command)
+    return str(command)
+
+
+def patch_paths(patch: str, cwd: str | None) -> list[str]:
+    """Files an apply_patch envelope adds, updates, deletes, or moves to."""
+    paths = []
+    for added, moved in _PATCH_PATH.findall(patch):
+        path = added or moved
+        if cwd and not os.path.isabs(path):
+            path = os.path.join(cwd, path)
+        if path not in paths:
+            paths.append(path)
+    return paths
+
+
+def file_paths_from_input(
+    tool_name: str, tool_input: dict[str, Any], cwd: str | None = None
+) -> list[str]:
+    # Codex may report apply_patch under its Edit/Write aliases, so the
+    # patch envelope itself decides
+    if tool_name in PATCH_TOOLS or "*** Begin Patch" in command_text(tool_input):
+        return patch_paths(command_text(tool_input), cwd)
     if tool_name == "NotebookEdit":
-        return tool_input.get("notebook_path") or tool_input.get("file_path")
-    return tool_input.get("file_path")
+        path = tool_input.get("notebook_path") or tool_input.get("file_path")
+    else:
+        path = tool_input.get("file_path")
+    return [path] if path else []
 
 
 # ---------------------------------------------------------------------------
@@ -210,24 +258,24 @@ def warn_user(message: str) -> None:
 
 def handle_pre_tool_use(event: dict[str, Any]) -> None:
     tool_name = event.get("tool_name", "")
-    if tool_name not in FILE_TOOLS:
+    if tool_name not in FILE_TOOLS | PATCH_TOOLS:
         return
-    tool_input = event.get("tool_input") or {}
-    path = file_path_from_input(tool_name, tool_input)
-    if not path:
-        return
-    append_record(
-        event.get("session_id", ""),
-        {
-            "ts": time.time(),
-            "event": "pre",
-            "tool_name": tool_name,
-            "file_path": path,
-            "pre_sha256": sha256_file(path),
-            "cwd": event.get("cwd"),
-            "git_head": git_head(event.get("cwd") or os.getcwd()),
-        },
-    )
+    cwd = event.get("cwd")
+    paths = file_paths_from_input(tool_name, event.get("tool_input") or {}, cwd)
+    head = git_head(cwd or os.getcwd()) if paths else None
+    for path in paths:
+        append_record(
+            event.get("session_id", ""),
+            {
+                "ts": time.time(),
+                "event": "pre",
+                "tool_name": tool_name,
+                "file_path": path,
+                "pre_sha256": sha256_file(path),
+                "cwd": cwd,
+                "git_head": head,
+            },
+        )
 
 
 def handle_post_tool_use(event: dict[str, Any]) -> None:
@@ -240,14 +288,12 @@ def handle_post_tool_use(event: dict[str, Any]) -> None:
         "tool_name": tool_name,
         "cwd": event.get("cwd"),
     }
-    if tool_name in FILE_TOOLS:
-        path = file_path_from_input(tool_name, tool_input)
-        if not path:
-            return
-        record["file_path"] = path
-        record["post_sha256"] = sha256_file(path)
-    elif tool_name == "Bash":
-        command = tool_input.get("command") or ""
+    if tool_name in FILE_TOOLS | PATCH_TOOLS:
+        for path in file_paths_from_input(tool_name, tool_input, event.get("cwd")):
+            append_record(session_id, {**record, "file_path": path, "post_sha256": sha256_file(path)})
+        return
+    if tool_name in SHELL_TOOLS:
+        command = command_text(tool_input)
         # Never store the command line itself: only its hash and the program
         # name (first token), so secrets in arguments stay on the machine.
         record["command_sha256"] = sha256_text(command)
@@ -324,10 +370,11 @@ def build_sign_request(
         return None
     canonical = json.dumps(summary, sort_keys=True, separators=(",", ":")).encode("utf-8")
     digest = hashlib.sha256(canonical).hexdigest()
+    source = harness()
     authored_by: dict[str, Any] = {
         "agent_id": agent_id,
-        "tool": "claude-code",
-        "attestation_source": ATTESTATION_SOURCE,
+        "tool": source["tool"],
+        "attestation_source": source["attestation_source"],
     }
     model_id = os.environ.get("ASQAV_MODEL_ID")
     if model_id:
@@ -349,7 +396,7 @@ def build_sign_request(
         "repo_ref": ref,
         "commit_sha": head,
         "change_digest": f"sha256:{digest}",
-        "change_ref": f"claude-code:session:{session_id}"[:256],
+        "change_ref": f"{source['tool']}:session:{session_id}"[:256],
         "change_class": change_class_for(summary),
         "authored_by": authored_by,
     }

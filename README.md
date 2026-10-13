@@ -1,4 +1,4 @@
-# Asqav receipts for Claude Code
+# Asqav receipts for Claude Code and OpenAI Codex
 
 Signed evidence of what your coding agent did.
 
@@ -35,6 +35,22 @@ asqav: signed code_authorship receipt sig_... verify at https://asqav.com/verify
 5. Open the verify URL. That page is public, so you can hand it to a reviewer or an auditor as is.
 
 Requirements: Python 3.10+, git, and network access to `api.asqav.com`. No pip packages needed. If the `asqav` Python SDK happens to be installed, the hook signs through it, otherwise it uses the standard library.
+
+## OpenAI Codex
+
+Codex speaks the same hook protocol, so the same script signs Codex sessions. Run it with `--harness codex`:
+
+1. Export `ASQAV_API_KEY` and `ASQAV_AGENT_ID` as above.
+2. Paste [`examples/codex-config.toml`](examples/codex-config.toml) into `~/.codex/config.toml` (or a trusted `<repo>/.codex/config.toml`) and set the absolute script path.
+3. Approve the hooks once with `/hooks` in Codex, then work as usual.
+
+At the end of each turn with activity, Codex shows the receipt line as a warning message. What Codex adds:
+
+- File edits arrive as `apply_patch`. Every file the patch adds, updates, deletes, or moves to is hashed before and after.
+- Shell commands may arrive as an argv list. Only the hash and the program name are kept, as with Claude Code.
+- The receipt records `authored_by.tool: "codex"` and `attestation_source: "codex-hooks"`.
+
+Codex hooks cover shell, `apply_patch`, MCP, and local function tools, not hosted tools such as web search, so the receipt covers what ran on your machine.
 
 ## What gets captured
 
