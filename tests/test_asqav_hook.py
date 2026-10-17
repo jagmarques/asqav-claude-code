@@ -208,6 +208,8 @@ def test_enforcement_mode_is_observe_only_fail_open(tmp_path):
 
     source = pathlib.Path(SCRIPT).read_text()
     assert not re.search(r"\b_?exit\s*\(\s*2\s*[,)]", source), "blocking exit code in use"
+    assert not re.search(r"return\s+2\b", source), "blocking return code in use"
+    assert not re.search(r"SystemExit\s*\(\s*2\b", source), "blocking SystemExit in use"
     sid = "sess-mode-1"
     for event_name in ("PreToolUse", "PostToolUse", "Stop", "SessionEnd"):
         event = {
