@@ -200,6 +200,28 @@ def test_fail_open_on_garbage_stdin():
     assert b"warning" in result.stderr
 
 
+def test_enforcement_mode_is_observe_only_fail_open(tmp_path):
+    """795: the hook is evidence, never a gate. Every event kind exits 0 and
+    emits no blocking decision, and the source never uses exit code 2."""
+    import pathlib
+    import re
+
+    source = pathlib.Path(SCRIPT).read_text()
+    assert not re.search(r"\b_?exit\s*\(\s*2\s*[,)]", source), "blocking exit code in use"
+    sid = "sess-mode-1"
+    for event_name in ("PreToolUse", "PostToolUse", "Stop", "SessionEnd"):
+        event = {
+            "session_id": sid,
+            "hook_event_name": event_name,
+            "tool_name": "Write",
+            "cwd": str(tmp_path),
+            "tool_input": {"file_path": str(tmp_path / "a.txt"), "content": "x"},
+        }
+        result = run_hook(event)
+        assert result.returncode == 0, event_name
+        assert b"decision" not in result.stdout, event_name
+
+
 def test_stop_without_api_key_warns_and_exits_zero(tmp_path):
     repo = git_repo(tmp_path)
     sid = "sess-nokey-1"
